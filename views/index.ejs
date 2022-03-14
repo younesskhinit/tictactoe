@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- CDN scripts -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+
+    <!-- Local scripts -->
+    <script src="/scripts/toasts.js"></script>
+    <script src="/scripts/sounds.js"></script>
+    <script src="/scripts/screens.js"></script>
+
+    <!-- Tailwind config -->
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+      };
+    </script>
+
+    <!-- Animate.css -->
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"
+    />
+
+    <title>Tic Tac Toe</title>
+  </head>
+  <body class="overflow-hidden bg-black dark">
+    <!-- Loading toast -->
+    <%- include('./toasts/loading.ejs'); %>
+    <!-- Connect toast -->
+    <%- include('./toasts/connect.ejs'); %>
+    <!-- Full toast -->
+    <%- include('./toasts/full.ejs'); %>
+    <!-- Invalid toast -->
+    <%- include('./toasts/invalid.ejs'); %>
+    <!-- Ended toast -->
+    <%- include('./toasts/ended.ejs'); %>
+    <!-- Won toast -->
+    <%- include('./toasts/won.ejs'); %>
+    <!-- Tie toast -->
+    <%- include('./toasts/tie.ejs'); %>
+
+    <!-- Home view -->
+    <%- include('./screens/home.ejs');%>
+    <!-- Waiting view -->
+    <%- include('./screens/waiting.ejs');%>
+    <!-- Game view -->
+    <%- include('./screens/game.ejs');%>
+
+    <script defer>
+      // Init connection to server
+      const socket = io({
+        autoConnect: false,
+      });
+
+      // Show home
+      display('home');
+
+      // Whose turn is it?
+      let turn;
+
+      // What color am I?
+      let color;
+      socket.on('color_assign', (data) => (color = data.color));
+
+      // Check page URL for room ID
+      function fetchRoom() {
+        const queryString = window.location.search;
+        const urlParams = new URLSearchParams(queryString);
+        return urlParams.get('room');
+      }
+
+      const urlRoomId = fetchRoom();
+
+      if (urlRoomId) {
+        // Show loading toast
+        toast('loading', 1000);
+
+        // Connect to server
+        socket.connect();
+
+        // Validate the room's existence & join if exists
+        socket.emit('validate_room', { id: parseInt(urlRoomId) });
+      }
+
+      // Check the result of a validate request
+      socket.on('room_validated', (data) => {
+        if (data.started) {
+          display('game');
+        } else if (data.full) {
+          toast('full');
+        } else if (data.exists && !data.started) {
+          disableStartButton();
+          setTimeout(() => display('waiting'), 1000);
+        } else {
+          disableStartButton();
+          toast('invalid');
+          setTimeout(() => (window.location = '/'), 2000);
+        }
+      });
+
+      // When the room is created, redirect to it
+      socket.on('room_created', (data) => {
+        setTimeout(() => {
+          window.history.replaceState(null, null, `?room=${data.id}`);
+          display('waiting');
+          socket.emit('validate_room', { id: data.id });
+        }, 1000);
+      });
+
+      // When the server orders the client to leave a room, handle the request
+      socket.on('leave_order', (data) => {
+        socket.emit('leave', { room: data.room });
+        toast('ended', 1000);
+        setTimeout(() => (window.location = '/'), 1500);
+      });
+
+      // When the player count is updated...
+      socket.on('count_updated', (data) => {
+        document.getElementById(
+          'waiting-count'
+        ).innerHTML = `${data.count} / 2`;
+      });
+
+      // When the room is ready to READY, start the game
+      socket.on('ready', (data) => {
+        display('game');
+      });
+
+      // When the game is won...
+      socket.on('game_won', (data) => {
+        document.getElementById(
+          'won-toast-detail'
+        ).innerHTML = `<b>${data.winner}</b>`;
+        toast('won');
+      });
+
+      // WHen the game is declared a tie...
+      socket.on('game_tie', (data) => {
+        toast('tie');
+      });
+
+      // When the game is a tie...
+      socket.on('game_tie', () => {
+        toast('tie');
+      });
+
+      // Handle board updates
+      socket.on('board_update', (data) => {
+        turn = data.turn;
+        document.getElementById(
+          'game-info'
+        ).innerHTML = `You are <b>${color}</b><br><b>${turn}</b>'s turn`;
+
+        for (let row = 0; row < data.board.length; row++) {
+          for (let col = 0; col < data.board[row].length; col++) {
+            const cell = data.board[row][col];
+            const element = document.getElementById(`${row}/${col}`);
+            if (cell !== null) {
+              element.classList.remove('bg-black');
+              element.classList.add(`bg-${cell}-500`);
+              element.classList.remove('cursor-pointer');
+              element.classList.add('cursor-not-allowed');
+            } else {
+              element.classList.remove('bg-red-500');
+              element.classList.remove('bg-green-500');
+              element.classList.add('bg-black');
+              element.classList.remove('cursor-not-allowed');
+              element.classList.add('cursor-pointer');
+            }
+          }
+        }
+      });
+
+      // On click 'Create Game' button
+      document
+        .getElementById('start')
+        .addEventListener('click', async (event) => {
+          event.preventDefault();
+
+          if (document.getElementById('start').disabled === true) return;
+
+          // Disable button
+          disableStartButton();
+
+          // Play select
+          play('select');
+
+          // Show loading toast
+          toast('loading', 1000);
+
+          // Connect to server
+          await socket.connect();
+
+          // Send create-game socket to server
+          await socket.emit('create_room');
+        });
+
+      // When a game cell is clicked...
+      const cells = document.getElementsByClassName('ttc-cell');
+      for (let i = 0; i < cells.length; i++) {
+        const cell = cells[i];
+        cell.addEventListener('click', (event) => {
+          event.preventDefault();
+
+          play('play');
+
+          const row = cell.id.split('/')[0];
+          const col = cell.id.split('/')[1];
+
+          socket.emit('play', {
+            room: fetchRoom(),
+            row,
+            col,
+          });
+        });
+      }
+    </script>
+  </body>
+</html>
